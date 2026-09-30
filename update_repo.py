@@ -3,14 +3,12 @@ import requests
 import re
 from urllib.parse import unquote
 
-# İsteklerin engellenmemesi için Gerçek iPhone Safari User-Agent'ı ve Headers
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
 }
 
-# ESign için temel JSON şablonu
 ESIGN_REPO = {
     "name": "Benim Otomatik ESign Repom",
     "identifier": "com.benim.esign.repo",
@@ -18,10 +16,51 @@ ESIGN_REPO = {
     "apps": []
 }
 
+def fetch_json_smart(json_url):
+    """Cloudflare ve bot korumalarını aşmak için sırayla curl_cffi, cloudscraper ve proxy dener."""
+    
+    # 1. Yöntem: curl_cffi (Chrome/Safari TLS parmak izini taklit eder - En etkili yöntem)
+    try:
+        from curl_cffi import requests as cffi_requests
+        print(f"Çekiliyor (curl_cffi ile): {json_url}")
+        res = cffi_requests.get(json_url, impersonate="chrome120", timeout=20)
+        if res.status_code == 200:
+            return res.json()
+        print(f"curl_cffi başarısız oldu: HTTP {res.status_code}")
+    except Exception as e:
+        print(f"curl_cffi hatası: {e}")
+
+    # 2. Yöntem: cloudscraper
+    try:
+        import cloudscraper
+        print(f"Çekiliyor (cloudscraper ile): {json_url}")
+        scraper = cloudscraper.create_scraper()
+        res = scraper.get(json_url, headers=HEADERS, timeout=20)
+        if res.status_code == 200:
+            return res.json()
+        print(f"cloudscraper başarısız oldu: HTTP {res.status_code}")
+    except Exception as e:
+        print(f"cloudscraper hatası: {e}")
+
+    # 3. Yöntem: Alternatif Proxy'ler
+    proxies = [
+        f"https://api.allorigins.win/raw?url={json_url}",
+        f"https://corsproxy.io/?{json_url}"
+    ]
+    for p_url in proxies:
+        try:
+            print(f"Çekiliyor (Proxy ile): {p_url}")
+            res = requests.get(p_url, headers=HEADERS, timeout=15)
+            if res.status_code == 200:
+                return res.json()
+        except Exception as e:
+            print(f"Proxy hatası ({p_url}): {e}")
+
+    return None
+
 def get_github_releases(repo_name):
     """GitHub reposundan en son sürümdeki IPA dosyasını çeker."""
     api_url = f"https://api.github.com/repos/{repo_name}/releases/latest"
-    
     try:
         response = requests.get(api_url, headers=HEADERS, timeout=10)
         if response.status_code == 200:
@@ -41,8 +80,6 @@ def get_github_releases(repo_name):
                         "size": asset['size'],
                         "iconURL": "https://via.placeholder.com/150"
                     }
-        else:
-            print(f"GitHub Hatası ({repo_name}): HTTP {response.status_code}")
     except Exception as e:
         print(f"Hata (GitHub - {repo_name}): {e}")
     return None
@@ -89,37 +126,15 @@ def get_direct_url_app(url):
         print(f"Hata (Direkt URL - {url}): {e}")
     return None
 
-def fetch_json_with_proxy(json_url):
-    """Cloudflare / 403 engellerini aşmak için proxy servislerini dener."""
-    targets = [
-        json_url,
-        f"https://api.allorigins.win/raw?url={json_url}",
-        f"https://corsproxy.io/?{json_url}"
-    ]
-    
-    for url in targets:
-        try:
-            res = requests.get(url, headers=HEADERS, timeout=15)
-            if res.status_code == 200:
-                # Bazı proxy yanıtları text olarak dönelirse JSON'a çevir
-                return res.json() if isinstance(res.json(), (dict, list)) else json.loads(res.text)
-            else:
-                print(f"Erişim Denemesi Başarısız ({url}): HTTP {res.status_code}")
-        except Exception as e:
-            print(f"Erişim Hatası ({url}): {e}")
-            
-    return None
-
 def get_external_json_apps(json_url):
-    """CyPwn, Scarlet, AltStore gibi harici JSON repolarındaki tüm uygulamaları çeker."""
+    """Harici JSON repolarındaki tüm uygulamaları çeker."""
     apps = []
-    data = fetch_json_with_proxy(json_url)
+    data = fetch_json_smart(json_url)
     
     if not data:
         print(f"Hata: {json_url} adresinden veri çekilemedi.")
         return apps
 
-    # Veri yapısını kontrol et (Sözlük mü, Liste mi?)
     if isinstance(data, dict):
         raw_apps = data.get('apps', [])
     elif isinstance(data, list):
@@ -131,7 +146,6 @@ def get_external_json_apps(json_url):
         if not isinstance(app, dict):
             continue
 
-        # Alternatif key isimlerini kontrol et
         download_url = app.get('downloadURL') or app.get('downloadUrl') or app.get('download_url') or app.get('url')
         if not download_url:
             continue
