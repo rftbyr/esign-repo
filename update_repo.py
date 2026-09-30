@@ -2,6 +2,7 @@ import json
 import requests
 import re
 from datetime import datetime
+from urllib.parse import unquote
 
 # ESign için temel JSON şablonu
 ESIGN_REPO = {
@@ -23,7 +24,6 @@ def get_github_releases(repo_name):
             app_name = repo_name.split('/')[-1]
             version = data.get('tag_name', '1.0').replace('v', '')
             
-            # IPA dosyasını bul
             for asset in data.get('assets', []):
                 if asset['name'].endswith('.ipa'):
                     return {
@@ -34,7 +34,7 @@ def get_github_releases(repo_name):
                         "downloadURL": asset['browser_download_url'],
                         "developerName": repo_name.split('/')[0],
                         "size": asset['size'],
-                        "iconURL": "https://via.placeholder.com/150" # İsteğe bağlı ikon
+                        "iconURL": "https://via.placeholder.com/150"
                     }
     except Exception as e:
         print(f"Hata ({repo_name}): {e}")
@@ -46,11 +46,9 @@ def get_telegram_links(channel_name):
     apps = []
     try:
         response = requests.get(url)
-        # Sadece basit bir örnek: Kanaldaki github.com ... .ipa uzantılı linkleri yakalamaya çalışır
-        # (Eğer kanal doğrudan dosya yüklüyorsa ek Telegram Bot API entegrasyonu gerekir)
         urls = re.findall(r'(https?://[^\s]+?\.ipa)', response.text)
         
-        for idx, ipa_url in enumerate(list(set(urls))): # Benzersiz olanları al
+        for idx, ipa_url in enumerate(list(set(urls))):
             apps.append({
                 "name": f"{channel_name} App {idx+1}",
                 "version": "1.0",
@@ -63,23 +61,53 @@ def get_telegram_links(channel_name):
         print(f"Hata ({channel_name}): {e}")
     return apps
 
+def get_direct_url_app(url):
+    """Doğrudan URL adresini ESign formatına dönüştürür."""
+    try:
+        # URL'nin son kısmından dosya adını alıp temizleyerek uygulama adı yapalım
+        file_name = url.split('/')[-1].split('?')[0] # Parametre varsa temizle
+        file_name = unquote(file_name) # URL kodlamasını (%20 vs) normal karaktere çevir
+        
+        app_name = file_name.replace('.ipa', '').replace('-', ' ').replace('_', ' ').title()
+        if not app_name:
+            app_name = "Özel Uygulama"
+
+        return {
+            "name": app_name,
+            "version": "1.0", # Direkt URL'de sürüm çekemediğimiz için standart 1.0 veriyoruz
+            "versionDescription": "Doğrudan URL ile eklendi",
+            "downloadURL": url,
+            "developerName": "Harici Kaynak",
+            "iconURL": "https://via.placeholder.com/150"
+        }
+    except Exception as e:
+        print(f"Hata (Direkt URL - {url}): {e}")
+    return None
+
 def main():
     # Kaynakları oku
     with open('sources.json', 'r') as f:
         sources = json.load(f)
     
-    # GitHub Repolarını İşle
+    # 1. GitHub Repolarını İşle
     for repo in sources.get('github_repos', []):
         print(f"İşleniyor: GitHub -> {repo}")
         app_data = get_github_releases(repo)
         if app_data:
             ESIGN_REPO["apps"].append(app_data)
             
-    # Telegram Kanallarını İşle
+    # 2. Telegram Kanallarını İşle
     for channel in sources.get('telegram_channels', []):
         print(f"İşleniyor: Telegram -> {channel}")
         telegram_apps = get_telegram_links(channel)
         ESIGN_REPO["apps"].extend(telegram_apps)
+        
+    # 3. Direkt URL'leri İşle
+    for url in sources.get('direct_urls', []):
+        print(f"İşleniyor: Direkt URL -> {url}")
+        app_data = get_direct_url_app(url)
+        if app_data:
+            ESIGN_REPO["apps"].append(app_data)
         
     # Sonuçları apps.json dosyasına yaz
     with open('apps.json', 'w', encoding='utf-8') as f:
