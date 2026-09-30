@@ -5,5 +5,9 @@
   ],
   "telegram_channels": [
     "ornek_kanal_kullanici_adi"
+  ],
+  "direct_urls": [
+    "https://ornek-site.com/uygulamalar/benim-uygulamam.ipa",
+    "https://baska-site.com/dosyalar/oyun_v2.ipa"
   ]
 }
