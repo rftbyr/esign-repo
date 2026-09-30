@@ -3,9 +3,11 @@ import requests
 import re
 from urllib.parse import unquote
 
-# İsteklerin engellenmemesi için Gerçek iPhone Safari User-Agent'ı
+# İsteklerin engellenmemesi için Gerçek iPhone Safari User-Agent'ı ve Headers
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
 }
 
 # ESign için temel JSON şablonu
@@ -87,49 +89,68 @@ def get_direct_url_app(url):
         print(f"Hata (Direkt URL - {url}): {e}")
     return None
 
+def fetch_json_with_proxy(json_url):
+    """Cloudflare / 403 engellerini aşmak için proxy servislerini dener."""
+    targets = [
+        json_url,
+        f"https://api.allorigins.win/raw?url={json_url}",
+        f"https://corsproxy.io/?{json_url}"
+    ]
+    
+    for url in targets:
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=15)
+            if res.status_code == 200:
+                # Bazı proxy yanıtları text olarak dönelirse JSON'a çevir
+                return res.json() if isinstance(res.json(), (dict, list)) else json.loads(res.text)
+            else:
+                print(f"Erişim Denemesi Başarısız ({url}): HTTP {res.status_code}")
+        except Exception as e:
+            print(f"Erişim Hatası ({url}): {e}")
+            
+    return None
+
 def get_external_json_apps(json_url):
     """CyPwn, Scarlet, AltStore gibi harici JSON repolarındaki tüm uygulamaları çeker."""
     apps = []
-    try:
-        response = requests.get(json_url, headers=HEADERS, timeout=15)
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Veri yapısını kontrol et (Sözlük mü, Liste mi?)
-            if isinstance(data, dict):
-                raw_apps = data.get('apps', [])
-            elif isinstance(data, list):
-                raw_apps = data
-            else:
-                raw_apps = []
-            
-            for app in raw_apps:
-                if not isinstance(app, dict):
-                    continue
+    data = fetch_json_with_proxy(json_url)
+    
+    if not data:
+        print(f"Hata: {json_url} adresinden veri çekilemedi.")
+        return apps
 
-                # Farklı key isimlerini kontrol et
-                download_url = app.get('downloadURL') or app.get('downloadUrl') or app.get('download_url') or app.get('url')
-                if not download_url:
-                    continue
-                
-                icon_url = app.get('iconURL') or app.get('iconUrl') or app.get('icon') or app.get('icon_url') or "https://via.placeholder.com/150"
-                
-                normalized_app = {
-                    "name": app.get('name', 'Bilinmeyen Uygulama'),
-                    "version": str(app.get('version', '1.0')),
-                    "versionDate": str(app.get('versionDate', app.get('date', ''))),
-                    "versionDescription": str(app.get('versionDescription', app.get('localizedDescription', app.get('subtitle', 'Harici depodan aktarıldı')))),
-                    "downloadURL": download_url,
-                    "developerName": app.get('developerName', app.get('developer', 'Bilinmiyor')),
-                    "iconURL": icon_url,
-                    "size": app.get('size', 0)
-                }
-                apps.append(normalized_app)
-            print(f"Başarılı: {json_url} adresinden {len(apps)} uygulama çekildi.")
-        else:
-            print(f"Hata ({json_url}): HTTP Sunucu Yanıtı {response.status_code}")
-    except Exception as e:
-        print(f"Hata (JSON Kaynağı - {json_url}): {e}")
+    # Veri yapısını kontrol et (Sözlük mü, Liste mi?)
+    if isinstance(data, dict):
+        raw_apps = data.get('apps', [])
+    elif isinstance(data, list):
+        raw_apps = data
+    else:
+        raw_apps = []
+
+    for app in raw_apps:
+        if not isinstance(app, dict):
+            continue
+
+        # Alternatif key isimlerini kontrol et
+        download_url = app.get('downloadURL') or app.get('downloadUrl') or app.get('download_url') or app.get('url')
+        if not download_url:
+            continue
+        
+        icon_url = app.get('iconURL') or app.get('iconUrl') or app.get('icon') or app.get('icon_url') or "https://via.placeholder.com/150"
+        
+        normalized_app = {
+            "name": app.get('name', 'Bilinmeyen Uygulama'),
+            "version": str(app.get('version', '1.0')),
+            "versionDate": str(app.get('versionDate', app.get('date', ''))),
+            "versionDescription": str(app.get('versionDescription', app.get('localizedDescription', app.get('subtitle', 'Harici depodan aktarıldı')))),
+            "downloadURL": download_url,
+            "developerName": app.get('developerName', app.get('developer', 'Bilinmiyor')),
+            "iconURL": icon_url,
+            "size": app.get('size', 0)
+        }
+        apps.append(normalized_app)
+        
+    print(f"Başarılı: {json_url} adresinden {len(apps)} uygulama çekildi.")
     return apps
 
 def main():
