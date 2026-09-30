@@ -1,0 +1,39 @@
+name: Otomatik ESign Repo Güncelleyici
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Her gece saat 00:00'da çalışır (UTC)
+  workflow_dispatch: # Manuel olarak butona basarak çalıştırmaya izin verir
+  push:
+    paths:
+      - 'sources.json' # sources.json dosyası güncellendiğinde tetiklenir
+
+jobs:
+  update-repo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Depoyu Çek (Checkout)
+        uses: actions/checkout@v3
+
+      - name: Python Kurulumu
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Gerekli Kütüphaneleri Yükle
+        run: |
+          pip install requests
+
+      - name: Scripti Çalıştır ve apps.json'ı Oluştur
+        run: python update_repo.py
+
+      - name: Değişiklikleri GitHub'a Kaydet (Commit)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add apps.json
+          git commit -m "🚀 Otomatik ESign repo güncellemesi" || echo "Değişiklik yok"
+          git push
