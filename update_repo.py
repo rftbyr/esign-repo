@@ -1,7 +1,6 @@
 import json
 import requests
 import re
-from datetime import datetime
 from urllib.parse import unquote
 
 # ESign için temel JSON şablonu
@@ -18,7 +17,7 @@ def get_github_releases(repo_name):
     headers = {"Accept": "application/vnd.github.v3+json"}
     
     try:
-        response = requests.get(api_url, headers=headers)
+        response = requests.get(api_url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
             app_name = repo_name.split('/')[-1]
@@ -37,15 +36,15 @@ def get_github_releases(repo_name):
                         "iconURL": "https://via.placeholder.com/150"
                     }
     except Exception as e:
-        print(f"Hata ({repo_name}): {e}")
+        print(f"Hata (GitHub - {repo_name}): {e}")
     return None
 
 def get_telegram_links(channel_name):
-    """Telegram Web önizlemesinden IPA veya Github linklerini tarar."""
+    """Telegram Web önizlemesinden IPA linklerini tarar."""
     url = f"https://t.me/s/{channel_name}"
     apps = []
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         urls = re.findall(r'(https?://[^\s]+?\.ipa)', response.text)
         
         for idx, ipa_url in enumerate(list(set(urls))):
@@ -58,23 +57,21 @@ def get_telegram_links(channel_name):
                 "iconURL": "https://via.placeholder.com/150"
             })
     except Exception as e:
-        print(f"Hata ({channel_name}): {e}")
+        print(f"Hata (Telegram - {channel_name}): {e}")
     return apps
 
 def get_direct_url_app(url):
-    """Doğrudan URL adresini ESign formatına dönüştürür."""
+    """Doğrudan IPA indirme linkini ekler."""
     try:
-        # URL'nin son kısmından dosya adını alıp temizleyerek uygulama adı yapalım
-        file_name = url.split('/')[-1].split('?')[0] # Parametre varsa temizle
-        file_name = unquote(file_name) # URL kodlamasını (%20 vs) normal karaktere çevir
-        
+        file_name = url.split('/')[-1].split('?')[0]
+        file_name = unquote(file_name)
         app_name = file_name.replace('.ipa', '').replace('-', ' ').replace('_', ' ').title()
         if not app_name:
             app_name = "Özel Uygulama"
 
         return {
             "name": app_name,
-            "version": "1.0", # Direkt URL'de sürüm çekemediğimiz için standart 1.0 veriyoruz
+            "version": "1.0",
             "versionDescription": "Doğrudan URL ile eklendi",
             "downloadURL": url,
             "developerName": "Harici Kaynak",
@@ -84,32 +81,70 @@ def get_direct_url_app(url):
         print(f"Hata (Direkt URL - {url}): {e}")
     return None
 
+def get_external_json_apps(json_url):
+    """CyPwn, Scarlet, AltStore gibi harici JSON repolarındaki tüm uygulamaları çeker."""
+    apps = []
+    try:
+        response = requests.get(json_url, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            raw_apps = data.get('apps', [])
+            
+            for app in raw_apps:
+                # Farklı repo formatlarındaki isim karmaşasını standart ESign formatına dönüştürüyoruz
+                download_url = app.get('downloadURL') or app.get('downloadUrl') or app.get('download_url')
+                if not download_url:
+                    continue  # İndirme linki yoksa atla
+                
+                icon_url = app.get('iconURL') or app.get('iconUrl') or app.get('icon') or "https://via.placeholder.com/150"
+                
+                normalized_app = {
+                    "name": app.get('name', 'Bilinmeyen Uygulama'),
+                    "version": str(app.get('version', '1.0')),
+                    "versionDate": app.get('versionDate', app.get('date', '')),
+                    "versionDescription": app.get('versionDescription', app.get('localizedDescription', 'Harici depodan aktarıldı')),
+                    "downloadURL": download_url,
+                    "developerName": app.get('developerName', app.get('developer', 'Bilinmiyor')),
+                    "iconURL": icon_url,
+                    "size": app.get('size', 0)
+                }
+                apps.append(normalized_app)
+            print(f"Başarılı: {json_url} adresinden {len(apps)} uygulama çekildi.")
+    except Exception as e:
+        print(f"Hata (JSON Kaynağı - {json_url}): {e}")
+    return apps
+
 def main():
-    # Kaynakları oku
     with open('sources.json', 'r') as f:
         sources = json.load(f)
     
-    # 1. GitHub Repolarını İşle
+    # 1. GitHub Repoları
     for repo in sources.get('github_repos', []):
         print(f"İşleniyor: GitHub -> {repo}")
         app_data = get_github_releases(repo)
         if app_data:
             ESIGN_REPO["apps"].append(app_data)
             
-    # 2. Telegram Kanallarını İşle
+    # 2. Telegram Kanalları
     for channel in sources.get('telegram_channels', []):
         print(f"İşleniyor: Telegram -> {channel}")
         telegram_apps = get_telegram_links(channel)
         ESIGN_REPO["apps"].extend(telegram_apps)
         
-    # 3. Direkt URL'leri İşle
+    # 3. Direkt IPA Linkleri
     for url in sources.get('direct_urls', []):
         print(f"İşleniyor: Direkt URL -> {url}")
         app_data = get_direct_url_app(url)
         if app_data:
             ESIGN_REPO["apps"].append(app_data)
+
+    # 4. Harici JSON Repoları (CyPwn vb.)
+    for json_url in sources.get('external_json_urls', []):
+        print(f"İşleniyor: Harici JSON -> {json_url}")
+        json_apps = get_external_json_apps(json_url)
+        ESIGN_REPO["apps"].extend(json_apps)
         
-    # Sonuçları apps.json dosyasına yaz
+    # Dosyayı Kaydet
     with open('apps.json', 'w', encoding='utf-8') as f:
         json.dump(ESIGN_REPO, f, ensure_ascii=False, indent=4)
         
